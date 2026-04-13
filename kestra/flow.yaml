@@ -1,0 +1,120 @@
+id: spy_finance_full_pipeline
+namespace: company.team
+
+inputs:
+  - id: project_id
+    type: STRING
+    defaults: "extended-bongo-493113-m0"
+  - id: bucket_name
+    type: STRING
+    defaults: "finance_data_lake_daniel_2026"
+
+tasks:
+  - id: python_ingestion
+    type: io.kestra.plugin.scripts.python.Script
+    containerImage: python:3.11-slim
+    beforeCommands:
+      - pip install yfinance google-cloud-storage google-cloud-bigquery pandas
+    env:
+      GOOGLE_APPLICATION_CREDENTIALS_JSON: "{{ kv('GCP_CREDS') }}"
+    script: |
+      import os
+      import yfinance as yf
+      import pandas as pd
+      from google.cloud import storage, bigquery
+      from google.cloud.exceptions import NotFound
+
+      try:
+          # 1. Setup Auth
+          creds_json = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
+          with open('credentials.json', 'w') as f:
+              f.write(creds_json)
+          os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = 'credentials.json'
+
+          # 2. Config from Kestra Inputs
+          PROJECT_ID = "{{ inputs.project_id }}"
+          BUCKET_NAME = "{{ inputs.bucket_name }}"
+          TABLE_ID = f"{PROJECT_ID}.market_data_raw.spy_prices"
+
+          # 3. Fetch & Clean
+          print("Downloading SPY data...")
+          data = yf.download("SPY", period="ytd")
+          if data.empty:
+              raise ValueError("Yahoo Finance returned no data!")
+              
+          data.columns = data.columns.get_level_values(0) 
+          data = data.reset_index()
+          data['Date'] = pd.to_datetime(data['Date']).dt.date
+          data.to_csv("finance_data.csv", index=False)
+
+          # 4. GCS Upload
+          storage.Client().bucket(BUCKET_NAME).blob("raw/spy_data.csv").upload_from_filename("finance_data.csv")
+          
+          # 4.5 Ensure Dataset exists (Self-healing)
+          bq_client = bigquery.Client()
+          dataset_ref = bq_client.dataset("market_data_raw")
+          try:
+              bq_client.get_dataset(dataset_ref)
+              print("Dataset already exists.")
+          except NotFound:
+              dataset = bigquery.Dataset(dataset_ref)
+              dataset.location = "US" 
+              bq_client.create_dataset(dataset)
+              print("✅ Created missing dataset: market_data_raw")
+
+          # 5. Partitioned BQ Load
+          job_config = bigquery.LoadJobConfig(
+              source_format=bigquery.SourceFormat.CSV,
+              write_disposition="WRITE_TRUNCATE",
+              autodetect=True,
+              time_partitioning=bigquery.TimePartitioning(type_=bigquery.TimePartitioningType.DAY, field="Date"),
+              clustering_fields=["Date"]
+          )
+          with open("finance_data.csv", "rb") as f:
+              bq_client.load_table_from_file(f, TABLE_ID, job_config=job_config).result()
+          print("✅ Success")
+      except Exception as e:
+          print(f"❌ Execution Failed: {e}")
+          exit(1)
+
+  - id: dbt_transformation
+    type: io.kestra.plugin.core.flow.WorkingDirectory
+    inputFiles:
+      dbt_project.yml: |
+        name: 'finance_transform'
+        version: '1.0.0'
+        config-version: 2
+        profile: 'default'
+        model-paths: ["models"]
+
+      profiles.yml: |
+        default:
+          target: dev
+          outputs:
+            dev:
+              type: bigquery
+              method: service-account-json
+              project: "{{ inputs.project_id }}"
+              dataset: "market_data_raw"
+              threads: 1
+              keyfile_json: {{ kv('GCP_CREDS') }}
+
+      models/fct_spy_moving_averages.sql: |
+        SELECT 
+            Date, 
+            Close,
+            Open,
+            AVG(Close) OVER (ORDER BY Date ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) as mavg_5_day,
+            CASE 
+                WHEN Close > Open THEN 'Gain'
+                WHEN Close < Open THEN 'Loss'
+                ELSE 'Flat'
+            END as day_sentiment
+        FROM `{{ inputs.project_id }}.market_data_raw.spy_prices`
+
+    tasks:
+      - id: dbt_run
+        type: io.kestra.plugin.dbt.cli.DbtCLI
+        containerImage: ghcr.io/kestra-io/dbt-bigquery:latest
+        commands:
+          - dbt build
