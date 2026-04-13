@@ -77,44 +77,20 @@ tasks:
           print(f"❌ Execution Failed: {e}")
           exit(1)
 
-  - id: dbt_transformation
+- id: dbt_transformation
     type: io.kestra.plugin.core.flow.WorkingDirectory
-    inputFiles:
-      dbt_project.yml: |
-        name: 'finance_transform'
-        version: '1.0.0'
-        config-version: 2
-        profile: 'default'
-        model-paths: ["models"]
-
-      profiles.yml: |
-        default:
-          target: dev
-          outputs:
-            dev:
-              type: bigquery
-              method: service-account-json
-              project: "{{ inputs.project_id }}"
-              dataset: "market_data_raw"
-              threads: 1
-              keyfile_json: {{ kv('GCP_CREDS') }}
-
-      models/fct_spy_moving_averages.sql: |
-        SELECT 
-            Date, 
-            Close,
-            Open,
-            AVG(Close) OVER (ORDER BY Date ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) as mavg_5_day,
-            CASE 
-                WHEN Close > Open THEN 'Gain'
-                WHEN Close < Open THEN 'Loss'
-                ELSE 'Flat'
-            END as day_sentiment
-        FROM `{{ inputs.project_id }}.market_data_raw.spy_prices`
-
     tasks:
+      - id: clone_repo
+        type: io.kestra.plugin.git.Clone
+        url: https://github.com/YOUR_GITHUB_USERNAME/spy-finance-pipeline.git
+        branch: main
+
       - id: dbt_run
         type: io.kestra.plugin.dbt.cli.DbtCLI
         containerImage: ghcr.io/kestra-io/dbt-bigquery:latest
+        # We tell dbt to look in the folder we just cloned
+        taskRunner:
+          type: io.kestra.plugin.scripts.sidecar.DockerBatch
         commands:
-          - dbt build
+          - dbt deps
+          - dbt build --project-dir dbt --profiles-dir dbt
