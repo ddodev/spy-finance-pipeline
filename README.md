@@ -40,15 +40,17 @@ To ensure cost-efficiency and performance, the spy_prices table is partitioned b
 ## Reproducibility (The "How-To")
 
 1. Clone the Repo
-   git clone https://github.com/ddodev/spy-finance-pipeline.git
 
-2. Infrastructure (Terraform)
+   
+          git clone https://github.com/ddodev/spy-finance-pipeline.git
+
+3. Infrastructure (Terraform)
    - Navigate to the /terraform directory.
    - Update variables.tf with your specific project_id.
    - Run: terraform init
    - Run: terraform apply
 
-3. Orchestration (Kestra)
+4. Orchestration (Kestra)
    - Import kestra/flow.yaml into your Kestra instance.
    - Add your GCP Service Account JSON to the Kestra KV Store as GCP_CREDS.
    - Execute the flow. 
@@ -58,10 +60,14 @@ To ensure cost-efficiency and performance, the spy_prices table is partitioned b
 
 The final dashboard provides actionable technical insights through two primary tiles:
 
-- Tile 1: Temporal Line Chart (Closing Price vs. 5-Day Moving Average).
-- Tile 2: Categorical Pie Chart (Distribution of Gain/Loss Days).
+
+
+- Chart 1: Temporal Line Chart (Closing Price vs. 5-Day Moving Average).
+- Chart 2: Categorical Pie Chart (Distribution of Gain/Loss Days).
 
 <img width="1184" height="649" alt="image" src="https://github.com/user-attachments/assets/2b61a9a5-85b3-4d86-b927-1d710fbf18ac" />
+Public Link:
+https://lookerstudio.google.com/reporting/ced90055-37b2-4c7d-a448-60ea8de0e646
 
 ## Pipeline Status
 
